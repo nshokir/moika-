@@ -4,6 +4,7 @@ import ctypes
 import os
 from datetime import datetime
 import threading
+import inputs
 
 # Загрузка DLL библиотеки
 try:
@@ -82,14 +83,19 @@ if usb_relay_dll:
 class USBRelayApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("USB Relay Manager - Joystick Ready")
-        self.root.geometry("550x750")
+        self.root.title("USB Relay Manager - Joystick Control")
+        self.root.geometry("550x800")
         self.root.resizable(False, False)
         
         self.device_handle = -1
         self.device_opened = False
         self.devices = []
         self.relay_states = [False] * 8
+        
+        # Джойстик
+        self.joystick_thread = None
+        self.joystick_running = True
+        self.joystick_name = "Not found"
         
         # Инициализация библиотеки
         if usb_relay_dll:
@@ -101,6 +107,10 @@ class USBRelayApp:
         
         # Автоматический поиск и открытие устройства
         self.root.after(500, self.auto_find_and_open_device)
+        
+        # Запуск потока для джойстика
+        self.joystick_thread = threading.Thread(target=self.joystick_listener, daemon=True)
+        self.joystick_thread.start()
     
     def setup_ui(self):
         # Основной фрейм
@@ -122,6 +132,14 @@ class USBRelayApp:
         
         self.status_label = ttk.Label(status_frame, text="Status: Not connected", font=("Arial", 10, "bold"))
         self.status_label.pack(side=tk.LEFT, padx=5)
+        
+        # ===== Статус джойстика =====
+        joystick_frame = ttk.Frame(main_frame)
+        joystick_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(joystick_frame, text="Joystick:", font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
+        self.joystick_label = ttk.Label(joystick_frame, text="Not found", font=("Arial", 9, "bold"), foreground="red")
+        self.joystick_label.pack(side=tk.LEFT, padx=5)
         
         # ===== Кнопки открытия/закрытия устройства =====
         device_buttons_frame = ttk.Frame(main_frame)
@@ -169,7 +187,7 @@ class USBRelayApp:
         scrollbar = ttk.Scrollbar(log_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.log_text = tk.Text(log_frame, height=8, yscrollcommand=scrollbar.set)
+        self.log_text = tk.Text(log_frame, height=6, yscrollcommand=scrollbar.set)
         self.log_text.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.log_text.yview)
     
@@ -326,6 +344,77 @@ class USBRelayApp:
     def update_relay_display(self):
         for i, btn in enumerate(self.relay_status_btns):
             btn.config(bg="green" if self.relay_states[i] else "red")
+    
+    def joystick_listener(self):
+        """Слушает события джойстика в отдельном потоке"""
+        try:
+            # Получаем список устройств
+            devices = inputs.get_gamepad()
+            if devices:
+                self.joystick_name = devices[0].name if hasattr(devices[0], 'name') else "Generic USB Joystick"
+                self.root.after(0, lambda: self.update_joystick_status(True))
+                self.log(f"Joystick found: {self.joystick_name}")
+        except:
+            pass
+        
+        # Слушаем события
+        button_states = {}
+        
+        while self.joystick_running:
+            try:
+                events = inputs.get_gamepad()
+                for event in events:
+                    # Кнопки (BTN)
+                    if event.ev_type == 'Key':
+                        # Button mapping для Generic USB Joystick
+                        # A = BTN_A, B = BTN_B, X = BTN_X, Y = BTN_Y
+                        # LB = BTN_TL, RB = BTN_TR, LT = BTN_TL2, RT = BTN_TR2
+                        
+                        button_map = {
+                            'BTN_A': 1,      # Relay 1
+                            'BTN_B': 2,      # Relay 2
+                            'BTN_X': 3,      # Relay 3
+                            'BTN_Y': 4,      # Relay 4
+                            'BTN_TL': 5,     # LB - Relay 5
+                            'BTN_TR': 6,     # RB - Relay 6
+                            'BTN_TL2': 7,    # LT - Relay 7
+                            'BTN_TR2': 8,    # RT - Relay 8
+                        }
+                        
+                        if event.state == 1 and event.code in button_map:  # Button pressed
+                            relay_channel = button_map[event.code]
+                            
+                            # Переключаем состояние релея
+                            new_state = not self.relay_states[relay_channel - 1]
+                            self.root.after(0, lambda ch=relay_channel, st=new_state: self.set_relay_state(ch, st))
+                            
+                            self.log(f"Joystick Button {event.code} - Relay {relay_channel} {'ON' if new_state else 'OFF'}")
+                    
+                    # D-Pad (ABS)
+                    elif event.ev_type == 'Absolute':
+                        # D-Pad для управления
+                        if event.code == 'ABS_HAT0X':
+                            if event.state == 1:  # Right
+                                self.log("D-Pad Right pressed")
+                            elif event.state == -1:  # Left
+                                self.log("D-Pad Left pressed")
+                        
+                        elif event.code == 'ABS_HAT0Y':
+                            if event.state == 1:  # Down
+                                self.log("D-Pad Down pressed")
+                            elif event.state == -1:  # Up
+                                self.log("D-Pad Up pressed")
+            
+            except Exception as e:
+                self.log(f"Joystick error: {str(e)[:50]}")
+                pass
+    
+    def update_joystick_status(self, found):
+        """Обновляет статус джойстика в UI"""
+        if found:
+            self.joystick_label.config(text=self.joystick_name, foreground="green")
+        else:
+            self.joystick_label.config(text="Not found", foreground="red")
 
 
 if __name__ == "__main__":
@@ -333,6 +422,7 @@ if __name__ == "__main__":
     app = USBRelayApp(root)
     
     def on_closing():
+        app.joystick_running = False
         if usb_relay_dll:
             usb_relay_exit()
         root.destroy()
