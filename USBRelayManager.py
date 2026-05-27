@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox
 import ctypes
 import os
 from datetime import datetime
+import threading
 
 # Загрузка DLL библиотеки
 try:
@@ -81,7 +82,7 @@ if usb_relay_dll:
 class USBRelayApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("USB Relay Manager")
+        self.root.title("USB Relay Manager - Joystick Ready")
         self.root.geometry("550x750")
         self.root.resizable(False, False)
         
@@ -97,6 +98,9 @@ class USBRelayApp:
                 messagebox.showerror("Error", "Failed to initialize USB Relay library")
         
         self.setup_ui()
+        
+        # Автоматический поиск и открытие устройства
+        self.root.after(500, self.auto_find_and_open_device)
     
     def setup_ui(self):
         # Основной фрейм
@@ -111,6 +115,13 @@ class USBRelayApp:
         
         self.device_combo = ttk.Combobox(top_frame, state="readonly", width=30)
         self.device_combo.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # ===== Статус =====
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill=tk.X, pady=5)
+        
+        self.status_label = ttk.Label(status_frame, text="Status: Not connected", font=("Arial", 10, "bold"))
+        self.status_label.pack(side=tk.LEFT, padx=5)
         
         # ===== Кнопки открытия/закрытия устройства =====
         device_buttons_frame = ttk.Frame(main_frame)
@@ -168,6 +179,13 @@ class USBRelayApp:
         self.log_text.see(tk.END)
         self.root.update()
     
+    def auto_find_and_open_device(self):
+        """Автоматически находит и открывает первое найденное устройство"""
+        self.find_device()
+        if self.devices:
+            self.device_combo.current(0)
+            self.open_device()
+    
     def find_device(self):
         if not usb_relay_dll:
             messagebox.showerror("Error", "DLL not loaded")
@@ -223,6 +241,7 @@ class USBRelayApp:
             self.device_handle = result
             self.device_opened = True
             self.device_status_btn.config(bg="green")
+            self.status_label.config(text=f"Status: Connected - {serial_number}")
             self.log(f"Device opened successfully. Handle: {self.device_handle}")
             self.update_relay_status()
         else:
@@ -234,6 +253,7 @@ class USBRelayApp:
             usb_relay_device_close(self.device_handle)
             self.device_opened = False
             self.device_status_btn.config(bg="red")
+            self.status_label.config(text="Status: Not connected")
             self.log("Device closed")
             self.relay_states = [False] * 8
             self.update_relay_display()
